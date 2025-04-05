@@ -90,7 +90,8 @@ function setupBot(argv: any) {
     host: argv.host,
     port: argv.port,
     username: argv.username,
-    plugins: { pathfinder }
+    plugins: { pathfinder },
+    version: "1.21.5" // Explicitly set version to support 1.21.5
   };
 
   // Log connection information
@@ -102,13 +103,28 @@ function setupBot(argv: any) {
   // Set up the bot when it spawns
   bot.once('spawn', async () => {
     console.error('Bot has spawned in the world');
+    console.error(`Connected to Minecraft server using protocol version: ${bot.version}`);
     
-    // Set up pathfinder movements
-    const mcData = minecraftData(bot.version);
-    const defaultMove = new Movements(bot, mcData);
-    bot.pathfinder.setMovements(defaultMove);
-    
-    bot.chat('Claude-powered bot ready to receive instructions!');
+    try {
+      // Set up pathfinder movements with fallback for 1.21.5
+      const mcData = minecraftData(bot.version);
+      
+      if (!mcData) {
+        console.error('Warning: minecraft-data not found for this version, falling back to 1.21.4');
+        // Fall back to 1.21.4 data if 1.21.5 isn't available in minecraft-data
+        const fallbackData = minecraftData('1.21.4');
+        const defaultMove = new Movements(bot, fallbackData);
+        bot.pathfinder.setMovements(defaultMove);
+      } else {
+        const defaultMove = new Movements(bot, mcData);
+        bot.pathfinder.setMovements(defaultMove);
+      }
+      
+      bot.chat('Claude-powered bot ready to receive instructions!');
+    } catch (error) {
+      console.error(`Error during bot setup: ${error}`);
+      bot.chat('Bot initialized with limited functionality due to version compatibility issues');
+    }
   });
   
   // Register common event handlers
@@ -466,25 +482,44 @@ function registerBlockTools(server: McpServer, bot: any) {
     },
     async ({ blockType, maxDistance = 16 }): Promise<McpResponse> => {
       try {
-        const mcData = minecraftData(bot.version);
+        // Get Minecraft data with fallback for 1.21.5
+        let mcData = minecraftData(bot.version);
+        let usedFallback = false;
+        
+        // If data for current version is not available, fall back to 1.21.4
+        if (!mcData || !mcData.blocksByName) {
+          console.error(`Warning: minecraft-data not found for version ${bot.version}, falling back to 1.21.4`);
+          mcData = minecraftData('1.21.4');
+          usedFallback = true;
+        }
+        
         const blocksByName = mcData.blocksByName;
         
         if (!blocksByName[blockType]) {
+          if (usedFallback) {
+            return createResponse(`Unknown block type: ${blockType}. Note: Using 1.21.4 compatibility data for 1.21.5.`);
+          }
           return createResponse(`Unknown block type: ${blockType}`);
         }
         
         const blockId = blocksByName[blockType].id;
         
-        const block = bot.findBlock({
-          matching: blockId,
-          maxDistance: maxDistance
-        });
-        
-        if (!block) {
-          return createResponse(`No ${blockType} found within ${maxDistance} blocks`);
+        // Use try/catch specifically for findBlock which might fail with new 1.21.5 blocks
+        try {
+          const block = bot.findBlock({
+            matching: blockId,
+            maxDistance: maxDistance
+          });
+          
+          if (!block) {
+            return createResponse(`No ${blockType} found within ${maxDistance} blocks`);
+          }
+          
+          return createResponse(`Found ${blockType} at position (${block.position.x}, ${block.position.y}, ${block.position.z})`);
+        } catch (findError) {
+          console.error(`Error finding block: ${findError}`);
+          return createResponse(`Error finding ${blockType}. This may be due to Minecraft 1.21.5 compatibility issues.`);
         }
-        
-        return createResponse(`Found ${blockType} at position (${block.position.x}, ${block.position.y}, ${block.position.z})`);
       } catch (error) {
         return createErrorResponse(error as Error);
       }
